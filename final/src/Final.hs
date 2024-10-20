@@ -6,6 +6,7 @@ import Common
 import Control.Monad.State hiding (fix)
 import Text.Printf
 import Prelude hiding (compare)
+import qualified Data.Function
 
 -- Finally tagless, partially evaluated
 -- Oleg Kiselyov
@@ -39,9 +40,65 @@ class Lam repr where
   app :: repr (a -> b) -> repr a -> repr b
   fix :: (repr a -> repr a) -> repr a
 
+newtype Box a = Box { unbox :: a }
 
-eval :: Env a -> a
-eval = unEnv
+instance Calc Box where 
+  intConst = Box 
+  intBin cond l r = Box $ getOp cond (unbox l) (unbox r)
+
+instance Cond Box where 
+  boolConst = Box 
+  boolBin cond l r = Box $ getOp cond (unbox l) (unbox r)
+  compare cond l r = Box $ getOp cond (unbox l) (unbox r)
+  ifExpr x l r = if unbox x then l else r 
+
+instance Lam Box where 
+  lam f = Box $ \x -> unbox $ f $ Box x 
+  app f = Box . unbox f . unbox 
+  fix f = Box $ Data.Function.fix (unbox . f . Box)
+
+instance Calc S where 
+  intConst x = S $ return $ show x 
+  intBin cond l r = S $
+    unS l >>= \al -> 
+    unS r >>= \ar -> 
+    return $ formatBinOp cond al ar
+
+instance Cond S where 
+  boolConst x = S $  
+    return $ show x 
+  boolBin cond l r = S $ 
+    unS l >>= \al -> 
+    unS r >>= \ar -> 
+    return $ formatBinOp cond al ar
+  compare cond l r = S $  
+    unS l >>= \al -> 
+    unS r >>= \ar -> 
+    return $ formatBinOp cond al ar
+  ifExpr x l r = S $ 
+    unS l >>= \al -> 
+    unS r >>= \ar -> 
+    unS x >>= \ax ->
+    return $ printf "if %s then %s else %s" ax al ar
+  
+instance Lam S where 
+  lam f = S $ do
+    x <- newVar
+    let sx = show x 
+    body <- unS (f (S $ return sx)) 
+    return $ printf "(lam \\%s -> %s)" sx body
+  app f a = S $ 
+    unS f >>= \uf -> 
+    unS a >>= \ua -> 
+    return $ printf "(%s %s)" uf ua
+  fix f = S $ do 
+    x <- newVar
+    let sx = show x 
+    body <- unS (f (S $ return sx)) 
+    return $ printf "(fix \\%s -> %s)" sx body
+
+eval :: Box a -> a
+eval = unbox
 
 view :: S a -> String
 view x = evalState (unS x) (VarState 0)
@@ -80,4 +137,4 @@ tipowApplied x y = app (app tipow (intConst x)) (intConst y)
 main = do
   let expr = tipowApplied 4 2
   putStrLn $ view expr
-  putStrLn $ show $ eval expr
+  print $ eval expr
